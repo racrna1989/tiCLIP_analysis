@@ -1,0 +1,14 @@
+# A tibble: 125 x 2
+   Sample         rRNAFactor
+   <chr>               <dbl>
+ 1 CBP80_3_t05          1.66
+ 2 CBP80_3_t00          1.70
+ 3 CBP20_1_PBSDRB       1.73
+ 4 CBP80_3_DMSO         1.75
+ 5 CBP20_1_t00          1.97
+ 6 CBP20_1_t20          2.01
+ 7 CBP80_2_t15          2.09
+ 8 CBP20_1_DMSO         2.18
+ 9 CBP80_3_t15          2.24
+10 CBP20_1_t10          2.27
+# … with 115 more rows
