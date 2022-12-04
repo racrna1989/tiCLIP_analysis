@@ -1,0 +1,90 @@
+---
+title: "Untitled"
+author: "RAC"
+date: "03/09/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+```
+
+
+#Supplementary Figure 6b
+
+3'Seq generated from pA+ and pA- ends, in HeLa cells depleted of RRP40. Below shows how the data was processed from counts files. Counts files were generated from bigwig files downloaded from GSE137612. 
+Specifically: GSM4083151, GSM4083150, GSM4083149, GSM4083132, GSM4083131 and GSM4083130. Bigwig files were converted to bedgraph files, then intersected with a snoRNA annotation file (bed). Below is the average of 3 biological replicates. 
+
+```{r, rel to wild type}
+
+df<-read.csv("../../data/RNAi_GSE137612-snoRNAs.GRCh38andrefGene.mature.3end.100ntupdown.binN201.sense.count", header = F, sep = "\t")
+
+
+colnames(df)<-c("sample","chr","start","stop","info","dist", "strand", "value")
+
+
+
+
+
+RNAi<-
+df %>% 
+  separate(info, c("ENSG", "snoRNA", "annotation", "location", "position"), sep = ":::") %>% 
+  unite("snoRNA", c(ENSG, snoRNA), sep = ":::") %>% 
+  unite("position", c(annotation, location, position), sep = ":::") %>% 
+  mutate(sample = gsub("batch","", sample)) %>% 
+  select(-c(chr,start,stop, strand)) %>% 
+  mutate(snoRNAtype = case_when(
+    grepl("SNORD|snoU|U3|U8|snoZ6|snoMBII-202", snoRNA) ~ "CDbox",
+    grepl("SNORA|ACA", snoRNA) ~ "HACAbox",
+    grepl("SCARNA", snoRNA) ~ "SCARNA",
+    TRUE ~ ""
+  )) %>% 
+  filter(grepl("CDbox|HACAbox", snoRNAtype)) %>% 
+  group_by(sample, snoRNAtype, dist) %>%
+  summarise(sum = sum(value)) %>% 
+  ungroup() %>%
+  spread(dist, sum, fill = 0)  %>% 
+  gather("dist","sum", 3:203) %>% 
+  separate(sample, c("GSM", "sample", "PAPgroup", "group", "rep"), sep = "_") %>%
+  ungroup() %>% 
+  mutate(sample = gsub("si", "", sample)) %>% 
+  mutate(sample = gsub("GFP", "WT", sample))
+
+
+#make rel to siCtrl (WT)
+
+RNAi_controls <- RNAi %>% filter(sample == "WT") %>% 
+                mutate(WT = sum) %>% 
+                select(-sum, -sample, -GSM)
+RNAi_controls
+RNAi_RRP40 <-RNAi %>% filter(sample == "RRP40")
+
+RNAi_rel_to_WT<-
+RNAi_RRP40 %>%
+  left_join(RNAi_controls) %>%
+  mutate(log2_rel_WT = log2(sum/WT)) 
+
+
+RNAi_rel_to_WT %>%
+  ggplot() +
+      geom_hline(yintercept = 0, alpha = 0.25) + 
+      geom_vline(xintercept = 0, linetype = "dashed") +
+      geom_line(aes(x=as.numeric(dist), y=log2_rel_WT, col = group), stat = "summary", size = 1) +
+      facet_grid(snoRNAtype ~ . , scales = "free_y") +
+      coord_cartesian(xlim = c(0,50)) +
+      scale_x_continuous(breaks = seq(0,100, 5)) + 
+      theme_bw() + 
+      scale_x_continuous(breaks = seq(0,50,5)) + 
+      xlab("Distance from snoRNA 3' end") + 
+      ylab("log2 (siRRP40/siCtrl") + 
+      theme(legend.position = "none") + 
+  theme_bw()
+```
+
+
+

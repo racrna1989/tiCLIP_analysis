@@ -1,0 +1,217 @@
+---
+title: "Figuire 6 E-F"
+author: "RAC"
+date: "04/09/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+
+```
+
+#read in count data
+```{r}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+df<-read.table("../../data/RBM7_3CLIP.rRNAScaled.hg38_snoRNAs_and_host_introns.100ntupdown.binN201.18SEP22.sense.counts")
+colnames(df)<-c("sample","chr","start","stop","info","dist","strand","value")
+head(df)
+snoRNAAnno<-read.table("../../data/snoRNAs.GRCh38andrefGene.mature.bed")
+
+colnames(snoRNAAnno)<-c("chr","start","stop","info","score","strand")
+
+snoRNAAnno<-separate(snoRNAAnno, info, c("ENSG", "snoRNA"), sep=":::")
+head(snoRNAAnno)
+
+snoRNA_list<-
+df %>% 
+  filter(dist %in% c(1:50)
+         & grepl("mature3end", info)
+         & !grepl("U8:::|U3:::", info)) %>% 
+  group_by(info) %>% 
+  summarise(sum = sum(value)) %>%
+  arrange(desc(sum)) %>% 
+  head(n= 100) %>%  
+  select(info) %>% 
+  separate(info, c("ENSG", "snoRNA", "annotation", "location", "position"), sep = ":::")%>%
+   unite("snoRNA", c(ENSG, snoRNA), sep = ":::") 
+
+  
+  exclude_list<-
+  snoRNAAnno %>% 
+    select(ENSG, snoRNA) %>% 
+    add_count(ENSG, snoRNA) %>% 
+    filter(n >1) %>% 
+    select(snoRNA) %>% unique()
+  
+  exclude_string<-paste0(exclude_list$snoRNA, collapse ="|")
+  
+df_1<-
+df %>%
+  select(-c(start,stop, chr,  strand)) %>% 
+  filter(grepl("mature3end", info)
+         & !grepl(exclude_string, info)) %>% 
+  separate(info, c("ENSG", "snoRNA", "annotation", "location", "position"), sep = ":::") %>% 
+  left_join(snoRNAAnno) %>%
+  unite("snoRNA", c(ENSG, snoRNA), sep = ":::") %>% 
+  unite("position", c(annotation, location, position), sep = ":::") %>% 
+  mutate(sample = gsub("_trimmed_clean_fastqAligned","", sample)) %>% 
+  mutate(snoRNAtype = case_when(
+    grepl("SNORD|snoU|U3|U8|snoZ6|snoMBII-202", snoRNA) ~ "CDbox",
+    grepl("SNORA|ACA", snoRNA) ~ "HACAbox",
+    grepl("SCARNA", snoRNA) ~ "SCARNA",
+    TRUE ~ ""
+  ))  %>%
+  spread(dist, value, fill = 0) %>%
+  gather("dist","value", 10:210) %>%
+  separate(sample, c("protein","rep","timepoint", "readType"), sep = "_") %>% 
+  mutate(timepoint = factor(timepoint, c("t00","t05","t10","t15","t20","t40", "t60","DMSO"))) %>%
+  mutate(readType = "3CLIP")
+
+
+```
+
+## Sup Fig. 6 A 
+
+Induvidual snoRNA coverage plots over selected snoRNAs 
+
+```{r, fig.height = 4, fig.width= 2}
+
+
+chosen_snoRNAs<-
+snoRNA_list %>% 
+  filter(grepl("SNORA52|SNORA80B|SNORD43|SNORD83A", snoRNA)) 
+
+
+L=unique(chosen_snoRNAs$snoRNA)
+length(L)
+
+plot_list = list()
+for(i in 1:length(L)){
+
+  SNORNA<-as.character(L[i])
+  print(SNORNA)
+  saveName<-gsub(":::","-",SNORNA)
+  
+plot<-  
+df_1 %>%
+  mutate(timepoint = factor(timepoint, c("t00","t05","t10","t15","t20","t40", "t60","DMSO"))) %>%
+  mutate(readType = "3CLIP") %>% 
+  filter(dist %in% c(-5:30)
+         & timepoint != "negative"
+         & grepl(SNORNA, snoRNA)) %>%
+  mutate(name = gsub(".*:","", snoRNA)) %>% 
+  ggplot(aes(y=value, x=as.numeric(dist), fill = timepoint)) + 
+  geom_bar(stat="summary") + 
+  geom_point(aes(shape = rep), size = 0.5, alpha =0.5, stat = "identity") + 
+  facet_grid(timepoint ~ name) + 
+  theme_bw(base_size = 10, base_family = "Helvetica") +
+  xlab(NULL)+
+  ylab(NULL) +
+  theme(text = element_text(size = 10),
+        legend.position = "none") +
+  scale_y_continuous(n.breaks = 4) +
+  theme(legend.position = "none",
+        strip.text.y.right = element_text(angle = 0)) 
+  
+  
+
+
+ plot_list[[i]] = plot
+}
+
+  
+length(plot_list)
+
+ 
+ for (i in 1:length(plot_list)) {
+   SNORNA<-L[i]
+    saveName<-gsub(":::","-",SNORNA)
+    file_name = paste0("plots/",saveName,".pdf")
+   # pdf(file_name, height = 4.0, width =2.0)
+   print(plot_list[[i]])
+     #  dev.off()
+ }
+
+
+  
+```
+#Fig 6 e-f
+#make heatmaps depicting RBM7 3'CLIP signals downstream of CD- and HACA-box snoRNAs
+```{r, }
+SNORNATYPE=c("HACAbox", "CDbox")
+plot_list2=list()
+for(i in 1:length(SNORNATYPE)){
+df2<-
+df_1 %>% 
+  #separate(sample, c("protein","rep","timepoint", "readType"), sep = "_") %>%
+  mutate(timepoint = factor(timepoint, c("negative","t00","t05","t10","t15","t20","t40", "t60","DMSO"))) %>%
+  mutate(readType = "3CLIP") %>% 
+  filter(dist %in% c(-5:30)
+        & grepl("mature3end", position) 
+        & !grepl("nonintronic", position)
+        & protein == "RBM7"
+        & !grepl("negative", timepoint)
+        ) %>% 
+  spread(dist, value, fill = 0) %>% 
+  mutate(row_wise_sum = rowSums(.[13:48])) %>% 
+  filter(snoRNAtype == SNORNATYPE[i]
+         & !grepl("U|u", snoRNA)) %>% 
+  
+  arrange(desc(row_wise_sum))
+
+totals<-
+df2 %>% 
+  filter(timepoint == "DMSO") %>% 
+  group_by(snoRNA) %>% 
+  summarise(totals = sum(row_wise_sum)) %>% 
+  ungroup() %>% 
+  arrange(desc(totals)) %>% 
+  head(n = 50)
+
+plot<-
+df2 %>% 
+  filter(timepoint == "DMSO") %>% 
+  gather("dist","value", 13:48) %>% 
+  mutate(pct = value/row_wise_sum)  %>% 
+  group_by(protein, timepoint, readType, snoRNA, position, chr, start, stop, score, strand, snoRNAtype, dist) %>% 
+  summarise(pct_avg = sum(pct)) %>% 
+  ungroup() %>% 
+  spread(dist, pct_avg, fill = 0) %>% 
+  mutate(row_wise_sum = rowSums(.[12:47])) %>%
+  gather("dist","value", 12:47) %>% 
+  mutate(pct = value/row_wise_sum) %>%
+  right_join(totals) %>% 
+  arrange(desc(totals)) %>% 
+  mutate(name = gsub(":::NR[0-9]*","", snoRNA)) %>% 
+  mutate(name = gsub(".*:","", name)) %>% 
+  ggplot(aes(x=as.numeric(dist), y=reorder(name, totals), fill = pct)) + 
+  geom_raster() + 
+  scale_fill_distiller(palette = "Spectral", direction = -1) +
+  facet_grid(. ~ snoRNAtype ) + 
+  theme_bw() +
+  theme(text = element_text(size = 8),
+        legend.position = "none") + 
+  xlab("") + ylab("")
+
+   plot_list2[[i]] = plot
+  #ggsave(paste0("top50_",SNORNATYPE,"DMSO_3CLIP.pdf"), height = 8, width = 2)
+
+}
+
+
+ for (i in 1:length(plot_list2)) {
+  
+    file_name = paste0("top50_",SNORNATYPE[i],"DMSO_3CLIP.pdf")
+    #pdf(file_name, height = 5.5, width =1.5)
+   print(plot_list2[i])
+     #  dev.off()
+ }
+```
+
+

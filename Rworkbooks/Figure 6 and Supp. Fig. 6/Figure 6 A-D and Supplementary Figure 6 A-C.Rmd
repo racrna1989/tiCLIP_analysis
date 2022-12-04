@@ -1,0 +1,377 @@
+---
+title: "Figure 6 A-D & Sup"
+author: "RAC"
+date: "24/08/2020"
+output: pdf_document
+---
+
+below code was used to process countfiles on cluster for snoRNAs
+```{r}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+
+
+#!/usr/bin/env Rscript
+#
+#suppressMessages(library(dplyr))
+#suppressMessages(library(tidyr))
+#suppressMessages(library(fuzzyjoin))
+#suppressMessages(library(stringr))
+#args = commandArgs(trailingOnly=TRUE)
+#
+#ANNOTATION_BED_FILEPATH<-args[1]
+#EXPRESSION_VECTOR_FILEPATH<-args[2]
+#IN_FILE_PATH<-args[3]
+#HOST_GENE_INDEX_FILEPATH<-args[4]
+#OUTFILE_PATH<-args[5]
+#
+##Function to process count files -------------------------
+#wrangle_bed_counts <- function(dataframe) {
+#  dataframe %>%
+#    #the gene ID is complicated and has different number of columns for some snoRNAs, best to label by grepl in new column.
+#    mutate(snoRNALocation = case_when(
+#      grepl(":::intronic:::", geneID) ~ "intronic", 
+#      grepl(":::nonintronic:::", geneID) ~ "non_intronic"
+#    )) %>% 
+#    mutate(region = case_when(
+#      grepl("intron3ss", geneID) ~ "intron3ss",
+#      grepl("intron5ss", geneID) ~ "intron5ss",
+#      grepl("mature3end", geneID) ~ "mature3end",
+#      grepl("mature5end", geneID) ~ "mature5end",
+#    )) %>%
+#      mutate(snoRNAType = case_when(
+#      grepl("SNORD|snoU|U3|U8|snoMe28S-Am2634|snoMBII|snoZ|snosnR66", geneID) ~ "cdBox", 
+#      grepl("SNORA|ACA|RNU105C|RNU105B", geneID) ~ "HACA",
+#      grepl("SCARNA", geneID) ~ "scaRNA",
+#      TRUE ~ "other"
+#    )) %>%
+#    mutate(geneID = as.character(geneID)) %>%
+#    #fuzzy_left join allows string matching rather than exact matching. Noticed more output afterwards, but unique fixed this. 
+#    fuzzy_left_join(host_gene_index, by =c("geneID" = "geneID"), match_fun = str_detect) %>%
+#    separate(hostGeneID, into=c("hostGeneID","transcriptBiotype","intronNumber","distFromTSS"),sep = ":::") %>% 
+#    unique() %>% 
+#    #left join the expression vector using specific predefined columns. 
+#    left_join(expression_vector, by = c("hostGeneID" = "geneID")) %>%
+#    mutate(norm_count = count/ctrl_RNAseq_expr) %>%
+#    select(-count, -ctrl_RNAseq_expr) %>%
+#    group_by(Sample,region,snoRNAType, snoRNALocation, DistToLandmark) %>% 
+#    summarise(sum_RNAseq_norm_count_norm_annotation_number = sum(norm_count)) %>% 
+#    left_join(number_of_intron_annotations) %>% 
+#    mutate(sum_RNAseq_norm_count_norm_annotation_number = sum_RNAseq_norm_count_norm_annotation_number/intron_count)
+#}
+#
+#
+#
+#
+##Load expression vector -----------------------------------
+#print("load expression vector")
+#
+#load(EXPRESSION_VECTOR_FILEPATH)
+#
+#expression_vector<-left_join( 
+#  (as.data.frame(ctrl_RNAseq_expr) %>% 
+#     tibble::rownames_to_column(var = "geneID")),
+#  (as.data.frame(ctrl_TTseq_expr) %>% 
+#     tibble::rownames_to_column(var = "geneID"))
+#) %>% 
+#  select(-ctrl_TTseq_expr) %>% 
+#  mutate(ctrl_RNAseq_expr = case_when(
+#    ctrl_RNAseq_expr ==0 ~ min(ctrl_RNAseq_expr[ctrl_RNAseq_expr > 0]), 
+#    TRUE ~  ctrl_RNAseq_expr
+#  ))
+#
+#
+##load annobed -----------------------
+#print("load annotation bed")
+#
+#annoBed<-read.table(ANNOTATION_BED_FILEPATH, sep = "\t", header = F)
+#print(ncol(annoBed))
+#colnames(annoBed)<-c("chr", "start", "end", "geneID", "score", "strand")
+#
+#number_of_intron_annotations<-
+#  annoBed %>% 
+#  mutate(snoRNALocation = case_when(
+#    grepl(":::intronic", geneID) ~ "intronic", 
+#    grepl(":::nonintronic", geneID) ~ "non_intronic"
+#  )) %>% 
+#  mutate(snoRNAType = case_when(
+#      grepl("SNORD|snoU|U3|U8|snoMe28S-Am2634|snoMBII|snoZ|snosnR66", geneID) ~ "cdBox", 
+#      grepl("SNORA|ACA|RNU105C|RNU105B", geneID) ~ "HACA",
+#      grepl("SCARNA", geneID) ~ "scaRNA",
+#      TRUE ~ "other"
+#    )) %>% 
+#  group_by(snoRNALocation, snoRNAType) %>%
+#  summarise(intron_count =n())
+#
+##load index file ------------------
+#print("load index file")
+#
+#host_gene_index<-read.table(HOST_GENE_INDEX_FILEPATH, sep = "\t", header = F)
+#colnames(host_gene_index)<-c("geneID", "hostGeneID")
+#host_gene_index$geneID<-as.character(host_gene_index$geneID)
+#
+#
+##load count file -----------------
+#print("load count file")
+#
+#int_exon_junction_coverage<-read.table(IN_FILE_PATH, sep = "\t", header = F)
+#colnames(int_exon_junction_coverage)<-c("Sample","chr", "start", "end", "geneID", "DistToLandmark", "strand", "count")
+#
+#int_exon_junction_coverage<-
+#  wrangle_bed_counts(int_exon_junction_coverage) 
+#
+##rbind the files together and write to output filename
+#
+#OUTFILE<-int_exon_junction_coverage
+#
+#write.table(OUTFILE, OUTFILE_PATH, quote = F, sep = "\t", row.names = F)
+
+
+
+```
+
+
+```{r}
+#
+#suppressMessages(library(dplyr))
+#suppressMessages(library(tidyr))
+#suppressMessages(library(stringr))
+#suppressMessages(library(ggplot2))
+#
+#dir.create("figs/")
+#dir.create("figs/snoRNA_coverage_plots")
+#
+##load in the file
+#annotation_file<-read.table("snoRNAs.GRCh38andrefGene.mature.bed")
+#colnames(annotation_file)<-c("chr", "start", "end", "geneID", "score", "strand")
+#
+##count number of snoRNAs to provide a number to normalise to.
+#annotation_number<-
+#annotation_file %>% 
+#  mutate(snoRNALocation = case_when(
+#      grepl(":::intronic", geneID) ~ "intronic", 
+#      grepl(":::nonintronic", geneID) ~ "non_intronic"
+#    )) %>%
+#  mutate(snoRNAType = case_when(
+#      grepl("SNORD|snoU|U3|U8|snoMe28S-Am2634|snoMBII|snoZ|snosnR66", geneID) ~ "cdBox", 
+#      grepl("SNORA|ACA|RNU105C|RNU105B", geneID) ~ "HACA",
+#      grepl("SCARNA", geneID) ~ "scaRNA",
+#      TRUE ~ "other"
+#    )) %>%
+#  group_by(snoRNALocation) %>% 
+#  summarise(n=n()) 
+
+suppressMessages(library(dplyr))
+suppressMessages(library(tidyr))
+suppressMessages(library(stringr))
+suppressMessages(library(ggplot2))
+library(extrafont)
+
+#read in count file 
+
+snoRNA_and_host_introns<-read.table("../../data/xiCLIP_all_hg38_snoRNAs_and_host_introns_no_gene_norm_no_gene_norm.tab", header = T)
+
+
+head(snoRNA_and_host_introns)
+#group by snoRNA type, location and each bin and the sum the count. This is then joined to the appropriate annotation number and futher normalised 
+
+#wrangle in the rest of the factors
+snoRNA_and_host_introns_wrangled_sum_for_graph<-
+snoRNA_and_host_introns %>% 
+  separate(Sample, c("Protein","Rep","Timepoint","Read")) %>% 
+  mutate(region = factor(region, c("intron5ss","mature5end","mature3end","intron3ss")),
+         Timepoint = factor(Timepoint, c("negative","PBSDRB","t00","t05","t10","t15","t20","t40","t60","DMSO"))) %>% 
+  mutate(Timepoint_f = case_when(Timepoint == "PBSDRB" ~ "t00",TRUE ~ as.character(Timepoint))) %>% 
+  mutate(Timepoint_f = factor(Timepoint_f, levels = c("negative","t00","t05","t10","t15","t20","t40","t60","DMSO")))
+
+head(snoRNA_and_host_introns_wrangled_sum_for_graph)
+
+figure_data<-
+snoRNA_and_host_introns_wrangled_sum_for_graph %>% 
+  filter(snoRNAType %in% c("cdBox","HACA") & 
+        snoRNALocation == "intronic" &
+        Timepoint != "negative" &
+        Protein == "RBM7" & 
+        region %in% c("mature3end", "intron3ss")
+     )
+
+head(figure_data)
+```
+
+#Figure 6 A-D. 
+Calculate coverage of read2 and 3'CLIP at nucleotide resolution over 101nt windows centred on the 3' end of snoRNAs or its corrosponding downstream intron-exon junction. SnoRNAs are stratified by class (H/ACA or cdBox). Normalisation: read coverage over snoRNA window to host gene expression, aggregate reads, and divide by the total number of snoRNA annotations.
+
+fig 6 a
+```{r}
+
+
+
+#Figure 6 A
+#whole read plots 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "read2" & Timepoint %in% c("t00", "DMSO")) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) +
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Fig 6. a - Controls; whole read") + 
+  theme(text = element_text(size=7, family="Arial")) 
+```
+fig 6 b
+```{r}
+#Figure 6 B
+dummy_data<- 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "read2" & Timepoint %in% c("t00", "DMSO"))
+
+#whole read plots 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "read2" & !(Timepoint %in% c("t00", "DMSO"))) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) +
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50),
+                  ylim=c(0,125)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Fig 6. b - Time course; whole read") + 
+  theme(text = element_text(size=7, family="Arial")) 
+
+```
+fig 6 c
+```{r}
+#Figure 6 C
+#whole read plots, 3'CLIP
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "3endOfRead2" & (Timepoint %in% c("t00", "DMSO"))) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) +
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Fig 6. c - Controls; 3'CLIP") + 
+  theme(text = element_text(size=7, family="Arial")) 
+```
+
+```{r}
+#Figure 6 D
+#invisible data to keep yaxis same
+dummy_data<- 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "3endOfRead2" & (Timepoint %in% c("t00", "DMSO")))
+
+#whole read plots 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "3endOfRead2" & !(Timepoint %in% c("t00", "DMSO"))) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 0.5) +
+  geom_blank(data=dummy_data, aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) + 
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Fig 6. d - Time course; 3'CLIP") + 
+  theme(text = element_text(size=7, family="Arial")) 
+
+
+```
+
+#Supplementary Figure 6 c  - e
+coverage as above over snoRNAs, except showing cross-link sites 
+also showing cross-link sites at 5' end, and upstream 5'SS for snoRNA containing introns
+
+
+supplementary fig 6d
+```{r}
+#Supplementary Figure 6  
+#cross-link
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "5primepos" & (Timepoint %in% c("t00", "DMSO"))) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) +
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Sup Fig. 6 d - Controls; cross-link") + 
+  theme(text = element_text(size=7, family="Arial")) 
+```
+supplementary fig 6 e
+```{r}
+#invisible data to keep yaxis same
+dummy_data<- 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "5primepos" & (Timepoint %in% c("t00", "DMSO")))
+
+#cross-link 
+figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "5primepos" & !(Timepoint %in% c("t00", "DMSO"))) %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, 
+                y=sum_count_norm_annotation_number, 
+                col = Timepoint), 
+            stat="summary", 
+            fun = "mean", 
+            alpha = 0.8, 
+            size = 0.5) +
+  geom_blank(data=dummy_data, 
+             aes(x=DistToLandmark, 
+                 y=sum_count_norm_annotation_number, 
+                 col = Timepoint), 
+             stat="summary", fun = "mean", alpha = 0.8, size = 1) + 
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Sup Fig. 6e Time course; cross-link") + 
+  theme(text = element_text(size=7, family="Arial")) 
+
+
+```
+
+supplementary fig 6 c
+```{r}
+supplementary_figure_data<-
+snoRNA_and_host_introns_wrangled_sum_for_graph %>% 
+  filter(snoRNAType %in% c("cdBox","HACA") & 
+        snoRNALocation == "intronic" &
+        Timepoint != "negative" &
+        Protein == "RBM7" & 
+        region %in% c("mature5end", "intron5ss")
+     )
+
+#supplementary figure 6 c
+
+supplementary_figure_data %>%
+  filter(snoRNAType %in% c("HACA","cdBox") & Read == "5primepos") %>% 
+  ggplot() +
+  geom_vline(xintercept = 0, linetype = "dotted", size = 0.5) + 
+  geom_line(aes(x=DistToLandmark, y=sum_count_norm_annotation_number, col = Timepoint), stat="summary", fun = "mean", alpha = 0.8, size = 1) +
+  facet_grid(Read+snoRNAType ~region, scales = "free_y") + 
+  theme_bw() +
+  coord_cartesian(xlim=c(-50,50),
+                  ylim=c(0,5)) +
+  xlab("Distance from landmark (nt)") + 
+  ylab("Normalised coverage") +
+  labs(subtitle = "Sup Fig6 C - Controls & Time course; cross-link") + 
+  theme(text = element_text(size=7, family="Arial")) 
+```
+
+
+
+
+
