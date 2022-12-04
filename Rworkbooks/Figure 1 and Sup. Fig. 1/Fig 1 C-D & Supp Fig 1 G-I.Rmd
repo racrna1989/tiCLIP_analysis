@@ -1,0 +1,333 @@
+---
+title: Global tiCLIP coverage over TUs stratified by biotype, exonic type, and coding
+  status
+author: "RAC"
+date: "08/05/2021"
+output:
+  pdf_document: default
+  html_document: default  
+---
+```{r, global options, include = F}
+
+
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+
+```
+#Figures 1 C-D & Supplementary Fig. 1 G-I
+```{r, setup}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+```
+
+#load annotations and data
+```{r}
+#data load and add col names (remove snRNA and histone RNAs from count files)
+exonIntronReads <- read.csv("../../data/xiCLIP_intronExon.200820.counts", sep="\t", header = F) %>% 
+  filter(!grepl(":::snRNA|:::histone_coding", V5 ))
+
+totalCounts <- read.csv("../../data/xiCLIP.read2.totalcounts.200402.tab", sep="\t", header = F)
+
+colnames(exonIntronReads)<-c("Sample","chr","start","end","ID","segmentNumber","strand","count")
+colnames(totalCounts)<-c("Sample","TotalCount")
+
+#load rRNA scalings
+libraryScalings <- read.csv("../../data/rRNAFactor.tab", sep=" ", header = F)
+colnames(libraryScalings)<-c("Sample","scaling")
+
+#load annotation files and add col names
+exonAnno <-read.table("../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated_exon_numbered.bed", header = F)
+intronAnno <-read.table("../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated_intron_numbered.bed", header = F)
+
+colnames(exonAnno)<-c("chr","start","end","ID","segmentNumber","strand")
+colnames(intronAnno)<-c("chr","start","end","ID","segmentNumber","strand")
+
+#data example
+head(exonIntronReads)
+head(totalCounts)
+head(libraryScalings)
+head(exonAnno)
+head(intronAnno)
+```
+#wrangle data and annotation files
+```{r, cache= TRUE}
+
+#catagorise gene annotation based on multiexonic or monoexonic
+totalExons<-exonAnno %>% 
+  separate(ID, into = c("GeneID","Biotype"), sep=":::") %>%
+  separate(segmentNumber, into = c("Segment", "SegmentNumber"), sep = "_") %>% 
+  group_by(GeneID, Biotype) %>% 
+  summarise(TotalExons = max(as.numeric(SegmentNumber))) %>%
+  mutate(Exonic = case_when(
+    TotalExons > 1 ~ "multiExonic",
+    TRUE ~ "monoExonic"
+  )) 
+
+#catagorise genes by class: lncRNA, pcRNA, sncRNA
+classes<-exonAnno %>% 
+  separate(ID, into = c("GeneID","Biotype"), sep=":::") %>%
+  separate(segmentNumber, into = c("Segment", "SegmentNumber")) %>%
+  mutate(size = as.numeric(end) - as.numeric(start)) %>%
+  mutate(class = case_when(
+    grepl("protein|histone", Biotype) ~ "pcRNA",
+    (!grepl("protein|histone", Biotype) & size > 250) ~ "lncRNA",
+    TRUE ~ "sncRNA"
+  )) %>%
+  select(GeneID, class) %>% 
+  unique()
+
+
+#wrangle total counts data
+tcDf<-totalCounts %>%
+  separate(Sample, into=c("Protein","Rep","Timepoint","readType"))
+
+#wrangle data
+eIRDf<-exonIntronReads %>%
+  separate(Sample, into=c("Protein","Rep","Timepoint","readType")) %>%
+  separate(ID, into = c("GeneID","Biotype"), sep=":::") %>%
+  separate(segmentNumber, into = c("Segment", "SegmentNumber")) %>% 
+  filter(!(Protein == "CBP20" & Rep == "3"))
+
+#total nucleotides covered intron and exonic gene segments
+segmentCovered_sizes<-eIRDf %>% 
+  select(start,end,GeneID,Segment)%>%
+  unique() %>%
+  group_by(Segment) %>%
+  summarise(size = sum(end-start)) %>%
+  mutate(sizeKb = size/1000)
+
+#total nucleotides covered by lncRNA, pcRNA, sncRNA
+segmentCovered_sizes_classes<-eIRDf %>% 
+  select(start,end,GeneID,Segment)%>%
+  left_join(classes) %>%
+  unique() %>%
+  group_by(Segment, class) %>%
+  summarise(size = sum(end-start)) %>%
+  mutate(sizeKb = size/1000)
+
+#total nucleotides covered by intronic, mono-, and multi-exonic gene segements
+segmentCovered_sizes_Exonic<-eIRDf %>% 
+  select(start,end,GeneID,Segment)%>%
+  left_join(totalExons) %>%
+  unique() %>%
+  group_by(Segment, Exonic) %>%
+  summarise(size = sum(end-start)) %>%
+  mutate(sizeKb = size/1000)
+
+#prep rRNA library scaling 
+libScale <- libraryScalings %>% 
+    separate(Sample, into=c("Protein","Rep","Timepoint")) 
+
+#make df with total counts and the rRNA scaling
+totalCountsDF<-merge(tcDf, libScale)
+
+head(totalCountsDF)
+head(eIRDf)
+  
+```
+
+
+
+#Figure 1 C
+Normalise total counts to rRNA factors and display average of replicates as a bar graph 
+```{r fig.asp = 0.5, fig.width = 5}
+
+Fig1C<-
+totalCountsDF %>% 
+  mutate(normalised = scaling * TotalCount) %>%
+  rename("raw" = TotalCount) %>% 
+  gather(value = "counts", key = "method", c(normalised, raw)) %>% 
+  filter(method == "normalised") %>% 
+  mutate(Timepoint_f = case_when(
+    Timepoint == "PBSDRB" ~ "t00", TRUE ~ Timepoint
+  )) %>%
+mutate(Timepoint_f = factor(Timepoint_f, levels =c("negative","t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO"))) %>%
+  ggplot(aes(x=Timepoint_f, y=counts/1000000)) +
+  geom_bar(aes(fill = Protein),stat="summary", fun="mean", show.legend = FALSE) + 
+  facet_grid(.~Protein, scales="free_y") +
+  geom_point(aes(shape = Rep),
+             position=position_jitterdodge(jitter.width = 0.2,
+                                            dodge.width=0), alpha = 0.5, size=1 ) +
+  scale_shape_manual(values = c(21,22,24)) +
+  theme_bw()+
+  theme(text = element_text(size = 8),
+        axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ylab(expression("Normalized counts" ~(10^6))) + 
+  xlab("") 
+
+Fig1C
+```
+
+
+#Figure 1 D
+Normalise total counts to rRNA factors and display average of replicates as a bar graph. Results are normalised to rRNA factor and total nucleotides of each segment
+Segments are defined as multiExonic-Introns, multiExonic-exons or monoExonic-exons
+```{r fig.asp = 1, fig.width = 5}
+
+
+Fig1D<-
+eIRDf %>%
+  left_join(totalExons) %>%
+  group_by(Protein, Rep, Timepoint, Segment, Exonic) %>% 
+  summarise(segSum = sum(count)) %>% #sum up all counts associated with segment (multiexonic-intron, multiexonic-exon, monoexonic-exon)
+  left_join(totalCountsDF) %>%  #total counts/rRNA factor
+  mutate(normTorRNAAdj = as.numeric(segSum)*as.numeric(scaling)) %>% #normalise data to rRNA factor
+  left_join(segmentCovered_sizes_Exonic) %>%  #join the total number of nucleotides present in each segment 
+  mutate(density_kb_all  = normTorRNAAdj/sizeKb) %>% # normalise reads to total number of nucleotides present in each segment
+    mutate(Timepoint_f = case_when(Timepoint == "PBSDRB" ~ "t00", TRUE ~ Timepoint)) %>%
+    mutate(Timepoint_f = factor(Timepoint_f, levels=c("negative", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO"))) %>%
+  ggplot(aes(x=Timepoint_f, y=density_kb_all)) +
+  geom_bar(aes(fill = Protein), stat="summary", fun = "mean") +
+  #stat_summary(fun.data="mean_cl_boot", geom="errorbar", width =0.1 )+ 
+   geom_point(aes(shape = Rep),
+             position=position_jitterdodge(jitter.width = 0.2,
+                                            dodge.width=0), alpha = 0.5, size=0.5 ) +
+  scale_shape_manual(values = c(21,22,24)) +
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=8),
+        axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ylab("CLIP Density")+
+  facet_grid(Protein~Exonic+Segment, scales="free_y")
+
+Fig1D
+```
+##Supplementry Figure 1 G
+Read density over introns. 
+```{r fig.asp = 1, fig.width = 3}
+
+
+
+suppFig1G <- 
+eIRDf %>% 
+  left_join(totalExons) %>% 
+  group_by(Protein, Rep, Timepoint, Segment, Exonic) %>%
+  summarise(SegmentSum = sum(count)) %>%
+  ungroup() %>%
+  left_join(totalCountsDF)%>%
+  mutate(normTorRNAAdj = as.numeric(SegmentSum)*as.numeric(scaling)) %>% 
+  #filter(Protein == "RBM7" & Timepoint == "DMSO") %>%
+  mutate(Timepoint_r = case_when(
+    Timepoint == "PBSDRB" ~ "t00",
+    TRUE ~ Timepoint
+  )) %>% 
+  mutate(Timepoint_r = factor(Timepoint_r, levels = c("negative", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO"))) %>% 
+  filter(Segment == "intron") %>%
+  #remove PHAX
+  filter(Protein != "PHAX") %>% 
+  ggplot(aes(x=Timepoint_r, y=normTorRNAAdj/10^6, fill = Protein)) +
+  geom_bar(stat="summary", fun = "mean") +
+  geom_point(aes(shape = Rep),
+             position=position_jitterdodge(jitter.width = 0.2,
+                                            dodge.width=0.), alpha = 0.5, size = 1) +
+  theme_bw()+
+  scale_x_discrete(guide = guide_axis(angle = 90))+
+  facet_grid(Protein~Segment, scales="free_y") + 
+  theme(legend.position = "none",
+        text = element_text(size=8)) + 
+  xlab("Timepoints") +
+  ylab(expression("Normalized counts" ~(10^6))) 
+
+suppFig1G
+```
+
+#Supplementry Figure 1 H
+same as figure 1 D except stratifying by coding potential and TU size. 
+```{r fig.asp = 1, fig.width = 5}
+
+suppFig1H<-
+eIRDf %>%
+  left_join(classes) %>%
+  group_by(Protein, Rep, Timepoint, Segment, class) %>% 
+  summarise(segSum = sum(count)) %>% 
+  left_join(totalCountsDF) %>% 
+  mutate(normTorRNAAdj = as.numeric(segSum)*as.numeric(scaling)) %>% 
+  left_join(segmentCovered_sizes_classes) %>% 
+  mutate(density_kb_all  = normTorRNAAdj/sizeKb) %>%
+      mutate(Timepoint_f = case_when(
+    Timepoint == "PBSDRB" ~ "t00", TRUE ~ Timepoint
+  )) %>% 
+  #remove PHAX
+  filter(Protein != "PHAX") %>% 
+  mutate(Timepoint_f = factor(Timepoint_f, levels=c("negative", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO"))) %>%
+  ggplot(aes(x=Timepoint_f, y=density_kb_all, fill = Protein)) +
+  geom_bar(stat="summary", fun="mean") +
+  geom_point(aes(shape = Rep),
+             position=position_jitterdodge(jitter.width = 0.2,
+                                            dodge.width=0), alpha = 0.5, size=1 ) +
+  scale_shape_manual(values = c(21,22,24)) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none",
+        text = element_text(size=8)) +
+  ylab("CLIP Density")+
+  xlab("") +
+  facet_grid(Protein~class+Segment, scales="free") 
+
+
+suppFig1H
+```
+
+
+
+#Supp Figure 1 I
+Calculating binding density for ALYREF-DMSO and RBM7-DMSO over exonic regions of the genome, but relative to CBP20-DMSO
+```{r fig.asp = 2, fig.width = 3}
+
+
+#calculate binding densities over multiexonic introns/exons and monoexonic exons
+df_densities<-
+eIRDf %>%
+  filter(Timepoint == "DMSO") %>% 
+  left_join(totalExons) %>% 
+  group_by(Protein, Rep, Timepoint, Segment, Exonic) %>% 
+  summarise(segSum = sum(count)) %>% 
+  left_join(totalCountsDF) %>% 
+  mutate(normTorRNAAdj = as.numeric(segSum)*as.numeric(scaling)) %>% 
+  left_join(segmentCovered_sizes_Exonic) %>% 
+  mutate(density_kb_all  = normTorRNAAdj/sizeKb) %>% 
+    mutate(Timepoint_f = case_when(
+    Timepoint == "PBSDRB" ~ "t00", TRUE ~ Timepoint
+  )) %>%
+  mutate(Timepoint_f = factor(Timepoint_f, levels=c("negative", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO"))) %>% 
+  group_by(Protein, Timepoint, Segment, Exonic) %>%
+  summarise(mean = mean(density_kb_all)) %>% 
+  ungroup()
+
+head(df_densities)
+
+#pull out CBP20 data density data
+CBP20<-
+df_densities %>% 
+  filter(Protein == "CBP20") %>% 
+  mutate(CBP20 = mean) %>% 
+  select(-Protein, -mean)
+
+head(CBP20)
+
+#normalise ALYREF and RBM7 binding density to CBP20 
+RBM7_ALYREF_densities<-
+df_densities %>% 
+  left_join(CBP20) %>% 
+  mutate(rel_to_CBP20 = mean/CBP20) %>% 
+  dplyr::filter(!(Protein %in% c("CBP20", "CBP80")) & Segment == "exon")
+
+head(RBM7_ALYREF_densities)
+
+
+SupFig1I<-
+RBM7_ALYREF_densities%>%
+  ggplot(aes(x=Protein, y=rel_to_CBP20)) +
+  geom_hline(yintercept = 1, linetype = "dotted") + 
+  geom_bar(aes(fill = Exonic), stat="summary", fun = "mean", 
+               position=position_dodge2()) +
+  theme_bw()+
+  theme(text = element_text(size=7),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = c(0.75, 0.8)) + 
+  ylab("CLIP density (relative to CBP20)") 
+
+SupFig1I
+```
+
