@@ -1,0 +1,138 @@
+---
+title: "Figure 3D-F"
+author: "RAC"
+date: "24/08/2020"
+output: pdf_document
+---
+packages and filepaths
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(tidyr))
+suppressMessages(library(ggplot2))
+COUNTS="../../data/xiCLIP_all_5primepos.rRNAScaled.hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.100ntupdown.binN201.sense.counts"
+EXPRESSION_VECTOR_FILEPATH="../../data/log2_mean_cov_RNAseq_TTseq.RData"
+ANNOTATION_BED_FILEPATH="../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.bed"
+
+```
+
+load and wrangle data
+```{r}
+#Load and wrangle expression vector -----------------------------------
+
+load(EXPRESSION_VECTOR_FILEPATH)
+
+expression_vector<-left_join( 
+  (as.data.frame(ctrl_RNAseq_expr) %>% 
+     add_rownames(var = "geneID")),
+  (as.data.frame(ctrl_TTseq_expr) %>% 
+     add_rownames(var = "geneID"))
+) %>% 
+  mutate(ctrl_RNAseq_expr = case_when(
+    ctrl_RNAseq_expr ==0 ~ min(ctrl_RNAseq_expr[ctrl_RNAseq_expr > 0]), 
+    TRUE ~  ctrl_RNAseq_expr
+  ))
+
+
+#load and wrangle annobed -----------------------
+
+annoBed<-read.table(ANNOTATION_BED_FILEPATH, sep = "\t", header = F) %>%
+setNames(c("chr", "start", "end", "geneID", "score", "strand")) %>% 
+    separate(geneID, into = c("geneID", "Biotype", "ExonNumber", "TotalNumberOfExons", "ExonSize", "ExonicDistance", "ExonDistFromTSS","ExonStature", "GeneStructure"), sep=":::") %>%
+  mutate_at(vars(ExonDistFromTSS,ExonicDistance,ExonSize,TotalNumberOfExons,ExonNumber), .funs = as.numeric) 
+
+#load and wrangle count file -----------------
+
+counts<-
+read.table(COUNTS, sep = "\t", header = F) %>% 
+  setNames(c("Sample","chr", "start", "end", "geneID", "DistToLandmark", "strand", "count")) %>%
+    separate(geneID, into = c("geneID", "Biotype", "ExonNumber", "TotalNumberOfExons", "ExonSize", "ExonicDistance", "ExonDistFromTSS","ExonStature", "GeneStructure"), sep=":::") %>% 
+    mutate_at(vars(ExonDistFromTSS,ExonicDistance,ExonSize,TotalNumberOfExons,ExonNumber), .funs = as.numeric) %>% 
+  filter(!grepl("CBP20_3", Sample))
+
+head(expression_vector)
+head(annoBed)
+head(counts)
+```
+
+process data
+
+```{r fig.height= 4, fig.width= 8}
+
+#normalise counts to expression of the gene
+norm_counts_to_gene_expression<-
+  counts %>%
+    left_join(expression_vector) %>% 
+    #this replaces NAs introduced by no value present in expression_vector, and replaces them with min value in expression_vector
+  	mutate_at(vars(ctrl_RNAseq_expr), ~replace(., is.na(.), min(expression_vector$ctrl_RNAseq_expr))) %>% 
+    mutate(norm_count = count/ctrl_RNAseq_expr)
+
+#only select multiexonic genes
+gene_annotations_to_use<-
+annoBed %>% 
+  left_join(expression_vector) %>% 
+  filter(TotalNumberOfExons > 1 & !grepl("snRNA|rRNA|TR_C_gene|IG_C_pseudogene|miRNA|misc_RNA", Biotype) & as.numeric(ExonSize) >99 ) %>% 
+  select(geneID, ctrl_RNAseq_expr, ctrl_TTseq_expr) %>% 
+  unique() %>%
+  mutate(ctrl_RNAseq_expr = as.numeric(ctrl_RNAseq_expr)) %>%
+  filter(ctrl_RNAseq_expr > 1 & geneID != "LINC00324")
+
+#number of annotations used for analysis
+exon_annotations_pos_n<-
+  annoBed %>% 
+  filter(geneID %in% gene_annotations_to_use$geneID & as.numeric(ExonSize) >99) %>%
+  group_by(GeneStructure) %>% 
+  summarise(anno_count =n())
+
+#number of TUs 
+GENECOUNT<-
+   annoBed %>% 
+  filter(geneID %in% gene_annotations_to_use$geneID) %>%
+  select(geneID) %>% 
+  unique() %>%
+  summarise(geneCount =n())
+
+#select genes
+data_for_fig_3d_f<-
+norm_counts_to_gene_expression %>% 
+  #filter for genes selected above
+  filter(geneID %in% gene_annotations_to_use$geneID & as.numeric(ExonSize) >99) %>%
+  group_by(Sample,GeneStructure, DistToLandmark) %>% 
+  summarise(sum_RNAseq_norm_count_norm_annotation_number = sum(norm_count)) %>%
+  left_join(exon_annotations_pos_n) %>% 
+  #normalise to number of annotations 
+  mutate(sum_RNAseq_norm_count_norm_annotation_number = sum_RNAseq_norm_count_norm_annotation_number/anno_count) %>%
+  #format data frame for plotting
+  separate(Sample, c("Protein","Rep","Timepoint","readType","region"), sep = "_") %>%
+  filter(Timepoint != "negative") %>%
+  mutate(Timepoint_f = case_when(
+    Timepoint == "PBSDRB" ~ "t00", 
+    TRUE ~ Timepoint )) %>%
+  mutate(region = factor(region, levels = c("5end","3end")),
+         Timepoint = factor(Timepoint, levels = c("PBSDRB", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO")),
+         Timepoint_f = factor(Timepoint_f, levels = c("t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO")),
+         Protein = factor(Protein, levels = c("CBP20", "CBP80", "ALYREF")),
+         readType = gsub("5primepos","cross-link", readType))
+
+fig3_d_f<-
+data_for_fig_3d_f %>% 
+  filter(Protein %in% c("ALYREF","CBP20","CBP80")) %>% 
+  ggplot() + 
+  geom_rect(data = data.frame(region = "3end"), aes(xmin = -100, xmax = 0, ymin = 0, ymax = Inf), alpha = 0.5, fill="grey") +
+  geom_rect(data = data.frame(region = "5end"), aes(xmin = 0, xmax = 100, ymin = 0, ymax = Inf), alpha = 0.5, fill="grey")  +
+  geom_line(aes(x=DistToLandmark, y = sum_RNAseq_norm_count_norm_annotation_number, col = Timepoint_f), stat="summary", fun = "mean", alpha = 0.8, size = 0.3) +
+  facet_grid(Protein+readType ~ GeneStructure + region, scale = "free") +
+  xlab("distance (nt)") + 
+  ylab("mean coverage")+
+  theme_bw()  
+
+fig3_d_f +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none") + 
+  xlab("") + 
+  ylab("") 
+  
+  #ggsave("figure_3_d-f.pdf", height = 3, width =7)
+
+```
+
+zz

@@ -1,0 +1,171 @@
+---
+title: "Figure 3G"
+author: "RAC"
+date: "16/05/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+
+EXONCOUNTS="xiCLIP_all_Exon_splice.count"
+SPLICEDEXONCOUNTS="xiCLIP_spliceSites10updown.count"
+EXPRESSION_VECTOR_FILEPATH="../../data/log2_mean_cov_RNAseq_TTseq.RData"
+ANNOTATION_BED_FILEPATH="../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.bed"
+SCALINGVECTOR="../../data/rRNAFactor.tab"
+
+```
+
+```{r LOAD ANNOTATION FILE AND FORMAT INTO TABLE}
+
+# scaling vector
+
+scaling_rRNA<-
+read.table(SCALINGVECTOR) %>% 
+  setNames(c("Sample","scalingFactorrRNA")) %>%
+  separate(Sample, c("Protein","Rep","Timepoint"))
+
+
+#Load expression vector -----------------------------------
+
+load(EXPRESSION_VECTOR_FILEPATH)
+
+expression_vector<-left_join( 
+  (as.data.frame(ctrl_RNAseq_expr) %>% 
+     add_rownames(var = "geneID")),
+  (as.data.frame(ctrl_TTseq_expr) %>% 
+     add_rownames(var = "geneID"))
+) %>% 
+  mutate(ctrl_RNAseq_expr = case_when(
+    ctrl_RNAseq_expr ==0 ~ min(ctrl_RNAseq_expr[ctrl_RNAseq_expr > 0]), 
+    TRUE ~  ctrl_RNAseq_expr
+  ))
+
+
+#load annobed -----------------------
+
+annoBed<-read.table(ANNOTATION_BED_FILEPATH, sep = "\t", header = F) %>% 
+setNames(c("chr", "start", "end", "geneID", "score", "strand")) %>% 
+  separate(geneID, into = c("geneID", "Biotype", "ExonNumber", "TotalNumberOfExon", "ExonSize", "ExonicDistance", "GenomicDistFromTSS","ExonStature", "GeneStructure"), sep=":::") %>%
+  mutate_at(vars(ExonNumber,TotalNumberOfExon,ExonSize,ExonicDistance,GenomicDistFromTSS), .funs = as.numeric) %>% 
+  mutate(sizeRange = case_when( 
+    GenomicDistFromTSS < 10000 ~ "<10k",
+    GenomicDistFromTSS %in% c(10000:20000) ~ "10k-20k",
+    GenomicDistFromTSS %in% c(20001:30000) ~ "20k-30k",
+    GenomicDistFromTSS %in% c(30001:40000) ~ "30k-40k",
+    GenomicDistFromTSS %in% c(40001:50000) ~ "40k-50k",
+    GenomicDistFromTSS %in% c(50001:60000) ~ "50k-60k",
+    GenomicDistFromTSS %in% c(60001:70000) ~ "60k-70k",
+    GenomicDistFromTSS %in% c(70001:80000) ~ "70k-80k",
+    GenomicDistFromTSS %in% c(80001:90000) ~ "80k-90k",
+    GenomicDistFromTSS %in% c(90001:100000) ~ "90k-100k",
+    GenomicDistFromTSS %in% c(100001:110000) ~ "100k-110k",
+    GenomicDistFromTSS %in% c(110001:120000) ~ "110k-120k",
+    GenomicDistFromTSS %in% c(120001:130000) ~ "120k-130k",
+    GenomicDistFromTSS %in% c(130001:140000) ~ "130k-140k",
+    GenomicDistFromTSS %in% c(140001:150000) ~ "140k-150k",
+    GenomicDistFromTSS %in% c(150001:160000) ~ "150k-160k",
+    GenomicDistFromTSS %in% c(160001:170000) ~ "160k-170k",
+    GenomicDistFromTSS %in% c(170001:180000) ~ "170k-180k",
+    GenomicDistFromTSS %in% c(180001:190000) ~ "180k-190k",
+    GenomicDistFromTSS %in% c(190001:200000) ~ "190k-200k",
+    GenomicDistFromTSS > 200000 ~ ">200k"))
+
+
+
+head(annoBed)
+head(EXPRESSION_VECTOR_FILEPATH)
+head(scaling_rRNA)
+```
+#Make figure for 3G
+plot number of spliced reads over first and internal exons
+```{r}
+#load data amd wrangle
+SS_Exon_DF_3<-read.table("../../data/xiCLIP_all_spliceSites.3endofExonand1ntdown.read2.count") %>% 
+  setNames(c("sampleInfo","chr","start","end", "geneID", "score", "strand", "count")) %>% 
+  separate(sampleInfo, into = c("Protein", "Rep", "Timepoint", "spliceStatus","readNumber")) %>%
+  separate(geneID, into = c("geneID", "Biotype", "ExonNumber", "TotalNumberOfExon", "ExonSize", "ExonicDistance", "GenomicDistFromTSS","ExonStature", "GeneStructure","region"), sep=":::") %>%
+  mutate_at(vars(ExonNumber,TotalNumberOfExon,ExonSize,ExonicDistance,GenomicDistFromTSS), .funs = as.numeric) %>% 
+  select(-chr,-start,-end) %>%
+  left_join(annoBed) %>%
+  left_join(scaling_rRNA) %>%
+  right_join(expression_vector) %>% 
+  drop_na() %>% 
+  unique() %>%
+  #normalise counts to rRNA factor and gene expression
+  mutate(rRNAScaledCounts = (count * scalingFactorrRNA)/ctrl_RNAseq_expr) %>% 
+  mutate(Timepoint_f = case_when(Timepoint == "PBSDRB" ~ "t00",TRUE ~ Timepoint )) %>%
+  mutate(Timepoint_f = factor(Timepoint_f, levels = c("negative","t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO")),
+         region = factor(region, c("5end","3end")))
+
+head(SS_Exon_DF_3)
+
+
+gene_with_first_exons_under_150nt<-
+SS_Exon_DF_3 %>% 
+  filter(as.numeric(ExonSize) < 150 & ExonNumber == "1" & GeneStructure == "multiExonicGene-firstExon") %>% 
+  select(geneID) %>% 
+  unique()
+
+head(gene_with_first_exons_under_150nt)
+
+number_of_annotations <-
+SS_Exon_DF_3 %>% 
+  filter(geneID %in% gene_with_first_exons_under_150nt$geneID) %>%
+  select(region, GeneStructure, geneID,sizeRange) %>% 
+  unique() %>% 
+  right_join(expression_vector) %>% 
+  group_by(region, GeneStructure) %>% 
+  summarise(n = n()) %>% 
+  drop_na()
+
+
+
+fig_3g<-
+SS_Exon_DF_3 %>% 
+  #select for TUs with first exons under 150nt. 
+  filter(geneID %in% gene_with_first_exons_under_150nt$geneID) %>%
+  ungroup() %>% 
+  #mutate(density = as.numeric(rRNAScaledCounts)) %>%
+  group_by(Protein, Rep, Timepoint_f, spliceStatus, readNumber, region,GeneStructure) %>%
+  summarise(count = sum(rRNAScaledCounts)) %>%
+  #normalise to number of annotations used in analysis
+  left_join(number_of_annotations) %>% 
+  ungroup()  %>% 
+  mutate(count = count/n) %>% 
+  #format plot
+  mutate_at("GeneStructure", ~replace(., GeneStructure == "multiExonicGene-internalExon", "Internal Exon")) %>% 
+  mutate_at("GeneStructure", ~replace(., GeneStructure == "multiExonicGene-firstExon", "First Exon")) %>% 
+  filter(!(GeneStructure %in% c("singleExonicGene", "multiExonicGene-lastExon"))) %>% 
+  filter(Protein %in% c("ALYREF","CBP20","CBP80")) %>% 
+  mutate(Protein = factor(Protein, levels = c("CBP20", "CBP80", "ALYREF"))) %>% 
+  filter(Timepoint_f != "negative") %>%
+  #plot
+  ggplot(aes(x=Timepoint_f, y=count)) + 
+  geom_bar(aes(fill = spliceStatus),stat="summary", fun=mean, position="dodge") + 
+  facet_grid(Protein~GeneStructure, scale = "free") + 
+  theme_bw() + 
+  theme(axis.text.x=element_text(angle = 90, hjust = 1),
+        text = element_text(size = 8),
+        legend.position = "none",
+        panel.spacing = unit(0.15, "lines"),
+        strip.text.x = element_text(size = 8),
+        strip.text.y = element_text(size = 8)
+        ) + 
+  ylab("") + 
+  xlab("") 
+ 
+fig_3g
+
+#fig_3g + 
+#ggsave("figure3g2.pdf", width = 2.75, height = 3.5)
+
+
+```

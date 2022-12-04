@@ -1,0 +1,234 @@
+---
+title: "Supp Fig 3 C"
+author: "RAC"
+date: "14/12/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(viridis)
+
+```
+
+
+```{r}
+
+COUNTS="../../data/xiCLIP_all_5primepos.rRNAScaled.hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.100ntupdown.binN201.sense.counts"
+EXPRESSION_VECTOR_FILEPATH="../../data/log2_mean_cov_RNAseq_TTseq.RData"
+ANNOTATION_BED_FILEPATH="../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.bed"
+```
+
+Load data frames containing expression of genes in HeLa cells, annotation bed file and count file
+```{r}
+#Load expression vector -----------------------------------
+
+load(EXPRESSION_VECTOR_FILEPATH)
+
+expression_vector <- left_join((
+  as.data.frame(ctrl_RNAseq_expr) %>%
+    add_rownames(var = "geneID")
+),
+(
+  as.data.frame(ctrl_TTseq_expr) %>%
+    add_rownames(var = "geneID")
+)) %>%
+  mutate(ctrl_RNAseq_expr = case_when(
+    ctrl_RNAseq_expr == 0 ~ min(ctrl_RNAseq_expr[ctrl_RNAseq_expr > 0]),
+    TRUE ~  ctrl_RNAseq_expr
+  ))
+
+
+#load annobed -----------------------
+
+annoBed <-
+  read.table(ANNOTATION_BED_FILEPATH, sep = "\t", header = F) %>%
+  setNames(c("chr", "start", "end", "geneID", "score", "strand")) %>%
+  separate(
+    geneID,
+    into = c(
+      "geneID",
+      "Biotype",
+      "ExonNumber",
+      "TotalNumberOfExons",
+      "ExonSize",
+      "ExonicDistance",
+      "ExonDistFromTSS",
+      "ExonStature",
+      "GeneStructure"
+    ),
+    sep = ":::"
+  ) %>%
+  mutate_at(
+    vars(
+      ExonDistFromTSS,
+      ExonicDistance,
+      ExonSize,
+      TotalNumberOfExons,
+      ExonNumber
+    ),
+    .funs = as.numeric
+  )
+
+
+#load 3end count file ONLY ALYREF -----------------
+
+counts <-
+  read.table(COUNTS, sep = "\t", header = F) %>%
+  setNames(c(
+    "Sample",
+    "chr",
+    "start",
+    "end",
+    "geneID",
+    "DistToLandmark",
+    "strand",
+    "count"
+  )) %>%
+  separate(
+    geneID,
+    into = c(
+      "geneID",
+      "Biotype",
+      "ExonNumber",
+      "TotalNumberOfExons",
+      "ExonSize",
+      "ExonicDistance",
+      "ExonDistFromTSS",
+      "ExonStature",
+      "GeneStructure"
+    ),
+    sep = ":::"
+  ) %>%
+  mutate_at(
+    vars(
+      ExonDistFromTSS,
+      ExonicDistance,
+      ExonSize,
+      TotalNumberOfExons,
+      ExonNumber
+    ),
+    .funs = as.numeric
+  ) %>%
+  filter(grepl("ALYREF", Sample))
+
+head(expression_vector)
+head(annoBed)
+head(counts)
+
+```
+```{r}
+#normalise counts to expression of genes, if gene is not present in expression vector then it is given the lowest expression present in the expression vector
+norm_counts_to_gene_expression <-
+  counts %>%
+  left_join(expression_vector) %>%
+  #this replaces NAs introduced by no value present in expression_vector, and replaces them with min value in expression_vector
+  mutate_at(vars(ctrl_RNAseq_expr), ~ replace(., is.na(.), min(expression_vector$ctrl_RNAseq_expr))) %>%
+  mutate(norm_count = count / ctrl_RNAseq_expr)
+
+head(norm_counts_to_gene_expression)
+
+#select exons over 50 and under 300nt in length, not single exon genes, and have at least an expression value of 1 at RNAseq.
+geneIDs_from_over1log2Exp <-
+  annoBed %>%
+  left_join(expression_vector) %>%
+  filter(
+    TotalNumberOfExons > 1 &
+      !grepl(
+        "snRNA|rRNA|TR_C_gene|IG_C_pseudogene|miRNA|misc_RNA",
+        Biotype
+      ) &
+      ExonSize %in% c(50:300)
+  ) %>%
+  select(geneID, ctrl_RNAseq_expr, ctrl_TTseq_expr) %>%
+  unique() %>%
+  mutate(ctrl_RNAseq_expr = as.numeric(ctrl_RNAseq_expr)) %>%
+  filter(ctrl_RNAseq_expr > 1 &
+           geneID != "LINC00324")
+
+number_of_exon_annotations <-
+  annoBed %>%
+  filter(geneID %in% geneIDs_from_over1log2Exp$geneID &
+           ExonSize %in% c(50:300)) %>%
+  group_by(GeneStructure, ExonSize) %>%
+  summarise(exon_count = n())
+
+
+for_graph <-
+  norm_counts_to_gene_expression %>%
+  filter(
+    geneID %in% geneIDs_from_over1log2Exp$geneID
+    & ExonSize %in% c(50:300)
+    & GeneStructure == "multiExonicGene-internalExon"
+  ) %>%
+  group_by(Sample, GeneStructure, ExonSize, DistToLandmark) %>%
+  summarise(sum_norm_count = sum(norm_count)) %>%
+  ungroup() %>%
+  group_by(Sample, GeneStructure, ExonSize) %>%
+  mutate(max = max(sum_norm_count),
+         norm_to_max = sum_norm_count / max(sum_norm_count)) %>%
+  separate(Sample,
+           c("Protein", "Rep", "Timepoint", "readType", "region"),
+           sep = "_") %>%
+  mutate(Timepoint_f = case_when(Timepoint == "PBSDRB" ~ "t00",
+                                 TRUE ~ Timepoint)) %>%
+  mutate(
+    region = factor(region, levels = c("5end", "3end")),
+    Timepoint = factor(
+      Timepoint,
+      levels = c("PBSDRB", "t00", "t05", "t10", "t15", "t20", "t40", "t60", "DMSO")
+    ),
+    Timepoint_f = factor(
+      Timepoint_f,
+      levels = c(
+        "negative",
+        "t00",
+        "t05",
+        "t10",
+        "t15",
+        "t20",
+        "t40",
+        "t60",
+        "DMSO"
+      )
+    )
+  ) %>%
+  group_by(Protein,
+           Timepoint_f,
+           region,
+           GeneStructure,
+           DistToLandmark,
+           ExonSize) %>%
+  summarise(mean = mean(norm_to_max)) %>%
+  ungroup()
+
+
+```
+#Supp Fig 3 C 
+#CLIP density over Exon 5' and 3' ends (facets) centred on 5' and 3' ends of exons (distance from landmark on x axis), stratified by exon lengths (yaxis). Only looking at internal exons between 50 and 300 nt in length
+
+```{r, fig.height= 2.5, fig.width=5}
+
+#graph for ALYREF
+for_graph %>%
+  filter(Protein == "ALYREF" & Timepoint_f == "DMSO") %>%
+  spread(DistToLandmark, mean, fill = 0) %>%
+  gather("DistToLandmark", "norm_to_max", c(`-100`:`100`)) %>%
+  mutate(DistToLandmark = as.numeric(DistToLandmark)) %>%
+  ggplot() +
+  geom_raster(aes(x = DistToLandmark, y = ExonSize,  fill = norm_to_max)) +
+  facet_grid(Timepoint_f ~ GeneStructure + region, scale = "free") +
+  scale_fill_viridis_c(option = "inferno",
+                       direction = -1,
+                       na.value = "black") +
+  theme_bw() +
+  labs(subtitle = "ALYREF") +
+  theme(axis.title = element_text(size = 6))
+
+```
