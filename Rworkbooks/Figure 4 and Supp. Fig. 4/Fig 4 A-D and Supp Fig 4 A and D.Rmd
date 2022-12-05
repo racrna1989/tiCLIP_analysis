@@ -1,0 +1,608 @@
+---
+title: "Figure 4A-D & Sup. Fig. 4 A & D"
+author: "RAC"
+date: "05/01/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+Script below was used to uniting bed file of mapped reads (cross-links) with bed file of all TUs exons
+
+```{reval=FALSE}
+#!/bin/bash
+#script for ubiting bg values with annotation file 200113
+#all dir paths should contain / at the end. 
+#InputVariables
+
+bedAnnotation=$1
+inBedDir=$2
+outDir=$3
+
+
+echo "Merging bedgraph counts with $bedAnnotation"
+echo "Using bedgraphs in $inBedDir"
+echo "Saving outputs in $outDir"
+
+#constructing output suffix for filename. 
+outFileName=$(basename $bedAnnotation | sed 's/.bed//g')
+
+#mk output dir
+mkdir -p $outDir
+
+#perform on each bed file (mapped tiCLIP cross-link sites)
+for inBed in ${inBedDir}*.bed;
+	do
+	#make variables
+	ID=$(basename $inBed | sed 's/.bed//g;s/-/_/g' )
+
+	echo "starting analysis for $ID"
+	
+	bedtools intersect -loj -s \
+	-a <( sort -k1,1 -k2,2n $inBed | sed 's/^chr//g' ) \
+	-b <( sort -k1,1 -k2,2n $bedAnnotation | sed 's/^chr//g' ) \
+	| awk '{OFS="\t"} $8 > -1' \
+	| awk -v ID=$ID '{OFS="\t"}{print ID,$7,$8,$9,$10,$11,$12,$1,$2,$3,$4,$5,$6}' > ${outDir}${ID}"_"${outFileName}"_sense.counts"
+
+	echo "completed for $ID"
+	
+done
+```
+
+
+```{r}
+library(scales)
+library(ggformula)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(ggsignif)
+library(ggpubr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60), tidy=TRUE)
+
+```
+
+
+load input files generated from script above annotation bed file, and expression vector
+```{r}
+dfFilePath="../../data/ALYREF_5primepos_hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS_sense.counts"
+
+annoFilePath="../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.bed"
+
+EXPRESSION_VECTOR_FILEPATH="../../data/log2_mean_cov_RNAseq_TTseq.RData"
+
+load(EXPRESSION_VECTOR_FILEPATH)
+
+#wrangle expression vector
+expression_vector<-left_join( 
+  (as.data.frame(ctrl_RNAseq_expr) %>% 
+     add_rownames(var = "geneName")),
+  (as.data.frame(ctrl_TTseq_expr) %>% 
+     add_rownames(var = "geneName"))
+) %>% 
+  mutate(ctrl_RNAseq_expr = case_when(
+    ctrl_RNAseq_expr ==0 ~ min(ctrl_RNAseq_expr[ctrl_RNAseq_expr > 0]), 
+    TRUE ~  ctrl_RNAseq_expr
+  ))
+```
+
+#Functions used for processing input
+```{r}
+#refined Function finds relative distance of xlinksite across feature. RNA split into 100 bins in total. 
+#Also genes are annotated with mature and gene size. 
+
+process_distToTSS_1 <- function(dfFilePath, annotationFilePath){
+
+#input file is a bed intersection between annotation file containing exons of genes
+df<-read.csv(dfFilePath, sep = "\t", header =F)
+col.names<-c("Sample",
+             #annotationfile
+             "chrAnno","startAnno", "stopAnno", "IDAnno", "scoreAnno",
+             "strandAnno",
+             #bed file of cross-link mapped bam file
+             "chrRead","startRead","stopRead","IDRead","scoreRead","strandRead")
+
+
+
+  
+head(df)
+
+print("wrangling data")
+  
+df1<-df %>%
+    setNames(col.names) %>%
+      select(-chrRead, -IDRead, -scoreRead, -scoreAnno) %>%
+      separate(IDAnno, c("geneName","biotype","exonID", "totalExons", "exonSize","cumSumExons", "distToTSS", "exonDesc","geneDesc"), sep =":::") %>%
+      select(-exonDesc)
+
+#cumSumExons = distance 
+#distToTSS = the distance 
+col.numeric<- c("chrAnno","startAnno","stopAnno","totalExons","exonSize","cumSumExons","distToTSS","startRead","stopRead")
+df1[col.numeric] <- sapply(df1[col.numeric],as.numeric)
+
+print("processing rel distance from TSS")
+#calculate postion of cross-link within the mature RNA. i.e. distance of cross-link to 5' end of RNA excluding introns. 
+df2<-df1 %>% 
+    mutate(rel.pos = ifelse(strandAnno == "+", ( (startRead-startAnno) + (cumSumExons-exonSize) ), 
+                     ifelse(strandAnno == "-", ( (stopAnno-stopRead) + (cumSumExons-exonSize) ),
+                     "no"))) %>%
+    select(Sample, geneName, biotype, geneDesc, rel.pos)
+
+
+print("loading annotation file")
+
+annoDF<-read.csv(annoFilePath , sep = "\t", header =F)
+
+print("making table with total sizes of RNAs")
+
+totalSizes<-annoDF %>%
+    setNames(c("chr","start","stop","ID","score","strand")) %>%
+    separate(ID, c("geneName","biotype","exonID", "totalExons", "exonSize","cumSumExons", "distToTSS", "exonDesc","geneDesc"), sep =":::") %>%
+    filter(exonID == totalExons) %>%
+    mutate(matureRNA = as.numeric(cumSumExons),
+           geneSize = as.numeric(ifelse(totalExons > 1, distToTSS, exonSize))) %>%
+    select(geneName, biotype, matureRNA, geneSize)
+
+df3<-df2 %>%
+  left_join(totalSizes)
+
+return(df3)
+
+}
+```
+
+```{r}
+ScaledNormalise_2_3_RPM_Normalisation <-function(DF, MINSIZE, MAXSIZE, annoFilePath, RPMFactorsFilePath){
+
+annoDF<-read.csv(annoFilePath, sep = "\t", header =F)  
+  
+totalSizes<-annoDF %>%
+  setNames(c("chr","start","stop","ID","score","strand")) %>%
+  separate(ID, c("geneName","biotype","exonID", "totalExons", "exonSize","cumSumExons", "distToTSS", "exonDesc","geneDesc"), sep =":::") %>%
+  filter(exonID == totalExons) %>%
+  mutate(matureRNA = as.numeric(cumSumExons),
+         geneSize = as.numeric(ifelse(totalExons > 1, distToTSS, exonSize))) %>%
+  select(geneName, biotype, matureRNA, geneSize)
+  
+calculated_test<-relDist_ALYREF %>%
+  left_join(totalSizes) %>%
+  mutate(rel.pos   = as.numeric(rel.pos),
+         matureRNA = as.numeric(matureRNA)) %>%
+  filter(matureRNA %in% c(MINSIZE:MAXSIZE)) %>%
+  mutate(rel.pos.2 = rel.pos/matureRNA)
+
+
+#assigning bin numbers to the rel.pos.2
+
+ALL <-calculated_test %>% mutate(rel.pos.2 = ifelse(rel.pos.2 == 0, rel.pos.2 + 0.0000001, rel.pos.2))
+max(ALL$rel.pos.2)
+min(ALL$rel.pos.2)
+ALL$new_distBin <- cut(ALL$rel.pos.2, seq(0, 1, by=0.01), labels=seq("1", "100", by = 1 ) ) 
+
+
+combined<-ALL %>%
+    separate(Sample, into=c("Protein", "Rep", "Timepoint","readType"), sep="_") %>%
+    #filter(Timepoint ==  "DMSO" & grepl("coding|histone",biotype) & !grepl("\\*|non", biotype)) %>%
+    group_by(geneName, biotype, Protein, Timepoint, Rep,  matureRNA, geneSize, new_distBin) %>%
+    summarise(tally = n()) %>%
+  #new steo to normalise to gene expression level
+    left_join(expression_vector) %>% 
+    mutate(tally_n = (tally/ctrl_RNAseq_expr)/(matureRNA/100)) #step to normalise count to bin size. 
+
+  #  mutate(tally_n = tally/(matureRNA/100)) #step to normalise count to bin size. 
+
+totalLibrarySizes<-read.table(RPMFactorsFilePath) %>%
+  setNames(c("Sample","RPMFactor") )%>%
+  separate(Sample, into=c("Protein","Rep","Timepoint","readType"), sep= "_") %>%
+  mutate(Rep = as.character(Rep)) %>% 
+  mutate(RPMFactor = 1000000/RPMFactor)
+  
+#this step taken from norm profile 3
+combined_2<-combined %>%    
+  left_join(totalLibrarySizes) %>%
+  mutate(tally_n = tally_n * RPMFactor) %>%
+  select(-RPMFactor) %>%
+  group_by(geneName, biotype, Protein, Timepoint, Rep,  matureRNA) %>%
+  mutate(totals_unNorm    = sum(tally), 
+         pct              = tally_n/sum(tally_n)*100) %>%
+  ungroup() %>%
+  select(Protein, Timepoint, Rep, matureRNA, geneName, biotype, new_distBin, totals_unNorm, pct) %>%
+  spread(new_distBin, pct, fill = 0) %>%
+  gather("distBin", "value", c('1':'100') )%>%
+  mutate(distBin = factor(distBin, levels = c(1:100)))
+
+return(combined_2)
+}
+```
+
+
+```{r}
+#calculate profiles 
+kMeansClustering_4 <-function(inputDF,CENTRES,REP,MINCOUNTS){
+  
+  #filter for DMSO and protein Codingg
+  DF<-inputDF %>%
+    filter(Timepoint ==  "DMSO" ) %>% 
+    spread(distBin, value)
+
+
+
+  #filter by rep and only use genes with a minumum of 40 counts per gene. 
+  DF1<-DF %>% 
+    filter(Rep == REP & totals_unNorm >= MINCOUNTS ) %>% 
+    column_to_rownames(var = "geneName") %>%
+    select('1':'100')
+ 
+
+  #kmeans clustering analysis (set seed for reproducibility)
+  set.seed(42)
+  kClusters<-kmeans(DF1, centers = CENTRES)
+  
+  clusters<-as.data.frame(kClusters$cluster) %>%
+    rownames_to_column(var = "geneName") %>%
+    rename(clusterID = `kClusters$cluster` )
+  
+  DF_merge <-DF %>%
+    right_join(clusters) %>%
+    group_by(clusterID, Rep) %>%
+    mutate(n = n()) %>% 
+    ungroup() %>%
+    gather("distBin", "value", c('1':'100')) %>%
+    mutate(distBin = factor(distBin, levels = c(1:100))) 
+  
+  return(DF_merge)
+  
+}
+```
+
+
+```{r}
+dfFilePath="../../data/ALYREF_5primepos_hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS_sense.counts"
+annoFilePath="../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS.bed"
+
+rRNAFactorsFilePath="../../data/rRNAFactor.tab"
+RPMFactorsFilePath="../../data/RPM_factors.tab"
+
+annoDF<-read.csv(annoFilePath, sep = "\t", header =F)  
+  
+geneStructures<-annoDF %>%
+  setNames(c("chr","start","stop","ID","score","strand")) %>%
+  separate(ID, c("geneName","biotype","exonID", "totalExons", "exonSize","cumSumExons", "distToTSS", "exonDesc","geneDesc"), sep =":::") %>% 
+  separate(geneDesc, into = c("geneStructure"), sep = "-") %>% 
+  select(geneName, geneStructure) %>% 
+  unique()
+
+head(geneStructures)
+
+totalSizes<-annoDF %>%
+    setNames(c("chr","start","stop","ID","score","strand")) %>%
+    separate(ID, c("geneName","biotype","exonID", "totalExons", "exonSize","cumSumExons", "distToTSS", "exonDesc","geneDesc"), sep =":::") %>%
+    filter(exonID == totalExons) %>%
+    mutate(matureRNA = as.numeric(cumSumExons),
+           geneSize = as.numeric(ifelse(totalExons > 1, distToTSS, exonSize))) %>%
+    select(geneName, biotype, matureRNA, geneSize)
+
+head(totalSizes)
+
+relDist_ALYREF<-process_distToTSS_1(dfFilePath,annoFilePath )
+
+head(relDist_ALYREF)
+
+ALYREF_100bins_scaled<-ScaledNormalise_2_3_RPM_Normalisation(relDist_ALYREF,200,100000, annoFilePath, RPMFactorsFilePath)
+
+head(ALYREF_100bins_scaled)
+
+ALYREF_100bins_scaled_clusters_1<-kMeansClustering_4(ALYREF_100bins_scaled, 2, 1, 20 )
+
+head(ALYREF_100bins_scaled_clusters_1)
+
+ALYREF_100bins_scaled_clusters_2<-kMeansClustering_4(ALYREF_100bins_scaled, 2, 2, 20 )
+
+head(ALYREF_100bins_scaled_clusters_2)
+```
+
+Join clusters 
+```{r}
+
+clusters<-
+full_join(
+  (
+ALYREF_100bins_scaled_clusters_1 %>%
+  select(Rep, geneName, clusterID) %>% 
+  unique() %>% 
+  mutate(Rep1_clusterID = paste0(clusterID)) %>% 
+  select(-clusterID)
+  ),
+  (
+ALYREF_100bins_scaled_clusters_2 %>% 
+  select(Rep, geneName, clusterID) %>% 
+  unique() %>% 
+  mutate(Rep2_clusterID = paste0(clusterID))%>% 
+  select(-clusterID)
+))
+
+clusters[is.na(clusters)] <- "0"
+
+
+```
+
+
+
+#Figure 4 A
+Plot profile of ALYREF-DMSO cross-links across exonic portions of TUs
+```{r}
+
+ALYREF_100bins_scaled %>%  
+  filter(Timepoint == "DMSO" & 
+           grepl("coding",biotype) & 
+           !grepl("\\*|non", biotype) &
+           totals_unNorm >= 20) %>%
+  spread(distBin, value) %>%
+  gather("distBin", "value", 8:107) %>%
+  ggplot(aes(x=as.numeric(distBin), y=value)) +
+  stat_summary(fun = mean, geom = "line", size = 0.5) +
+  stat_summary(fun.data="mean_cl_boot", geom="ribbon", alpha = 0.25, col=NA ) +
+  theme_bw() +
+  xlab("Cross-link position within transcript (%)") +
+  scale_x_continuous(breaks = c(1,25,50,75,100),
+                      labels= c("TSS","25%","50%","75%","TES")) +
+  theme(legend.position = "none") +
+  ylab("Relative density (%)")  
+```
+
+#Venn diagram for Supplementary Figure 4 a. 
+Intersect genes identified in kmeans clustering from ALYREF-1-DMSO and ALYREF-2-DMSO
+```{r}
+Rep1_cluster1<-
+  ALYREF_100bins_scaled_clusters_1 %>% 
+  filter(clusterID == 1 & Rep == "1") %>% 
+  select(geneName, clusterID, Rep) %>% 
+  unique ()
+
+Rep1_cluster2<-
+  ALYREF_100bins_scaled_clusters_1 %>% 
+  filter(clusterID == 2 & Rep == "1") %>% 
+  select(geneName, clusterID, Rep) %>% unique ()
+
+Rep2_cluster1<-
+  ALYREF_100bins_scaled_clusters_2 %>% 
+  filter(clusterID == 1 & Rep == "2") %>% 
+  select(geneName, clusterID, Rep) %>% 
+  unique ()  
+
+Rep2_cluster2<-
+  ALYREF_100bins_scaled_clusters_2 %>% 
+  filter(clusterID == 2 & Rep == "2") %>% 
+  select(geneName, clusterID, Rep) %>% 
+  unique () 
+
+#make venn diagram of cluster id overlaps
+library(gplots)
+
+#df("resultsFigs/210119/ven.pdf")
+venn(list(Rep1_cluster1 = (Rep1_cluster1 %>% select(geneName) %>% as.list()%>% unlist()),
+Rep1_cluster2 =(Rep1_cluster2 %>% select(geneName) %>% as.list()%>% unlist()),
+Rep2_cluster1 = (Rep2_cluster1 %>% select(geneName) %>% as.list()%>% unlist()),
+Rep2_cluster2 = (Rep2_cluster2 %>% select(geneName) %>% as.list()%>% unlist())))
+#dev.off()
+
+#Rep1_cluster1 %>% select(geneName) %>% as.list() %>% unlist()
+
+#intersect the 2 different genes groups identified 
+clus_1<-intersect(Rep1_cluster1$geneName,Rep2_cluster1$geneName) %>% as.data.frame() %>% mutate(cluster = "1")
+clus_2<-intersect(Rep1_cluster2$geneName,Rep2_cluster2$geneName) %>% as.data.frame() %>% mutate(cluster = "2")
+
+#combine to one dataframe
+clust_all<-rbind(clus_1, clus_2) %>%
+        setNames(c("geneName", "clusterID")) %>% 
+  mutate(geneName = as.character(geneName))
+
+clust_all
+```
+
+
+#Figure 4B
+Plot profile of ALYREF-DMSO cross-links across group 1 and 2 genes
+```{r}
+
+ALYREF_100bins_scaled %>%  
+  filter(geneName %in% clust_all$geneName) %>% 
+  left_join(clust_all) %>% 
+  filter(Timepoint == "DMSO" & 
+           totals_unNorm >= 20) %>%
+  spread(distBin, value) %>%
+  gather("distBin", "value", '1':'100') %>% 
+  ggplot(aes(x=as.numeric(distBin), y= value, col = as.factor(clusterID), group=as.factor(clusterID))) +
+  stat_summary(fun = mean, geom = "line", size = 0.5) +
+  stat_summary(fun.data="mean_cl_boot", geom="ribbon", alpha = 0.25, col=NA ) +
+  theme_bw() +
+  xlab("Cross-link position within transcript (%)") +
+  scale_x_continuous(breaks = c(1,25,50,75,100),
+                     labels= c("TSS","25%","50%","75%","TES")) +
+  theme(legend.position = "none") +
+  ylab("Relative density (%)")  
+
+```
+
+
+#Figure 4 C 
+analyse expression, gene size, exonic size (cDNA size) and number of exons associated with group 1 and 2 genes
+
+```{r}
+
+annotation_metaData<-read.table("../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS_updatedWithUTRs_andSS.200429.tab", sep ="\t", header = T)
+
+
+
+data_for_boxplots<-
+merge(annotation_metaData, clust_all) %>%
+  filter(exonID == totalExons) %>% 
+  mutate(genSize = exonSize+genDistToTSS) %>% 
+  select(-exonID, -exonSize,-stop, -start, -chr, -strand, -score, -genDistToTSS ) %>%
+  select(c("geneName", "clusterID", "totalExons","relSize","genSize")) %>%
+  mutate_at(vars("totalExons", "relSize", "genSize"), log2 )  %>% 
+  left_join(expression_vector)
+
+data_for_boxplots %>% 
+  ggplot(aes(x=clusterID,y=genSize, fill = as.factor(clusterID), group=clusterID)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(stat="summary", shape = 21, col = "white", size =4) +
+  labs(subtitle = "gene size") + 
+  stat_compare_means(method = "wilcox.test") + 
+  theme(legend.position = "none")
+
+data_for_boxplots %>% 
+  ggplot(aes(x=clusterID,y=relSize, fill = as.factor(clusterID), group=clusterID)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(stat="summary", shape = 21, col = "white", size =4) +
+  labs(subtitle = "cDNA size") + 
+  stat_compare_means(method = "wilcox.test") + 
+  theme(legend.position = "none")
+
+data_for_boxplots %>% 
+  ggplot(aes(x=clusterID,y=totalExons, fill = as.factor(clusterID), group=clusterID)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(stat="summary", shape = 21, col = "white", size =4) +
+  labs(subtitle = "Exons") + 
+  stat_compare_means(method = "wilcox.test") + 
+  theme(legend.position = "none")
+
+data_for_boxplots %>% 
+  ggplot(aes(x=clusterID,y=ctrl_RNAseq_expr, fill = as.factor(clusterID), group=clusterID)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(stat="summary", shape = 21, col = "white", size =4) +
+  labs(subtitle = "RNAseq Expression") + 
+  stat_compare_means(method = "wilcox.test") + 
+  theme(legend.position = "none")
+```
+
+#Supplementary Figure 4 D
+boxplot of 1st exons size in group 1 and 2 genes
+```{r}
+annotation_metaData<-read.table("../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS_updatedWithUTRs_andSS.200429.tab", sep ="\t", header = T)
+
+
+
+data_for_boxplots<-
+merge(annotation_metaData, clust_all) %>%
+  filter(exonID == 1) %>% 
+  select(c("geneName", "clusterID", "exonSize")) %>% 
+  mutate_at(vars("exonSize"), log2 )
+
+data_for_boxplots %>% 
+  ggplot(aes(x=clusterID,y=exonSize, fill = as.factor(clusterID), group=clusterID)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(stat="summary", shape = 21, col = "white", size =4) +
+  labs(subtitle = "TSSto5SS") + 
+  stat_compare_means(method = "wilcox.test") + 
+  theme(legend.position = "none")
+```
+
+
+#Figure 4 D
+plot profile of exon junction density across group 1 and 2 genes
+```{r}
+
+
+#make profile of positions of exon junctions 
+#first prepair all genes
+annoDF.WholeGene<-read.csv("../../data/hg38_HeLa_trimmed_loci_major_primary_isoform_annotated.exonNumber.sizeRange.TotalExonNumber.DistFromTSS.relDistToTSS_updatedWithUTRs_andSS.200429.bed", 
+                           sep = "\t", header =F) %>%
+          setNames(c("chr", "start", "stop", "IDAnno", "score", "strand")) %>%
+        separate(IDAnno, c("geneName",
+                           "biotype",
+                           "WholeGene.exonID", 
+                           "WholeGene.totalExons", 
+                           "WholeGene.exonSize",
+                           "WholeGene.relSize", 
+                           "WholeGene.distToTSS", 
+                           "WholeGene.geneDesc",
+                           "WholeGene.distToDist5SS",	
+                           "WholeGene.distToDist3SS",
+                           "WholeGene.relSizeof5UTR",	
+                           "WholeGene.genSizeof5UTR",
+                           "WholeGene.relSize3UTR",	
+                           "WholeGene.genSizeof3UTR",
+                           "WholeGene.relSizeofCDS",	
+                           "WholeGene.genSizeofCDS",
+                           "WholeGene.pAtoUp3ss",	
+                           "WholeGene.pAtoUp5ss",
+                           "WholeGene.exonDesc"), sep =":::") 
+
+all_genes<-annoDF.WholeGene 
+
+
+totalSizes_WholeGene.mRNASize<-annoDF.WholeGene %>%
+        filter(WholeGene.exonID == WholeGene.totalExons) %>%
+        mutate(WholeGene.matureRNAsize = as.numeric(WholeGene.relSize),
+               WholeGene.geneSize = as.numeric(ifelse(WholeGene.totalExons > 1, 
+                                            (as.numeric(WholeGene.distToTSS)+as.numeric(WholeGene.exonSize)), 
+                                            WholeGene.exonSize))) %>%
+  select(geneName, WholeGene.matureRNAsize)
+
+totalSizes_relSize<-
+  annoDF.WholeGene %>%
+    select(geneName, WholeGene.relSize, WholeGene.exonID, WholeGene.totalExons)
+
+#annotation for multiexonic genes for profiles 
+exonic_geneName<-
+all_genes %>% 
+  mutate(exonic = case_when(
+WholeGene.totalExons > 1 ~ "multiexonic", TRUE ~ "monoexonic"
+  )) %>% 
+  select(geneName, exonic) %>% 
+  unique()
+
+#generate profiles for group 1 and 2 
+
+EJ_profiles_cluster<-
+clust_all %>%
+  #add total mRNA sizes, exon ids and relative size of mRNA up to exon displayed
+  mutate(geneName = as.character(geneName)) %>%
+  left_join(totalSizes_WholeGene.mRNASize) %>%
+  left_join(totalSizes_relSize) %>%
+  mutate(WholeGene.relSize = as.integer(WholeGene.relSize),
+         WholeGene.exonID  = as.integer(WholeGene.exonID),
+         WholeGene.matureRNAsize = as.integer(WholeGene.matureRNAsize)
+  ) %>% 
+  #calculate relative positions of junction
+  mutate(rel_position_of_EJ = WholeGene.relSize/WholeGene.matureRNAsize ) %>% 
+  #remove last exon as this is does not end with an exonjunction 
+  filter(WholeGene.exonID != WholeGene.totalExons) 
+
+
+EJ_profiles_1<-EJ_profiles_cluster
+
+#add bins
+EJ_profiles_1$new_distBin <- cut(EJ_profiles_1$rel_position_of_EJ, seq(0, 1, by=0.01), labels=seq("1", "100", by = 1 ) ) 
+
+
+EJ_profiles_2<-EJ_profiles_1 %>%
+    group_by(clusterID, geneName, WholeGene.matureRNAsize, new_distBin) %>%
+    summarise(tally = n()) %>%
+ #normalise to gene expression level
+    left_join(expression_vector) %>% 
+    mutate(tally_n = (tally/ctrl_RNAseq_expr)/(WholeGene.matureRNAsize/100),
+           tally_nr = tally/(WholeGene.matureRNAsize/100)) #step to normalise count to bin size. 
+
+fig<-
+EJ_profiles_2 %>% 
+   mutate(totals_unNorm    = sum(tally), 
+        pct              = tally_nr/sum(tally_nr)*100) %>%
+  spread(new_distBin, pct, fill = 0) %>%
+  gather("distBin", "value", c('1':'100') )%>%
+  mutate(distBin = factor(distBin, levels = c(1:100))) %>%
+  ggplot(aes(x=as.numeric(distBin) , y=value)) +
+  stat_summary(fun = mean, geom = "line", size = 0.5, aes(col = clusterID)) +
+  stat_summary(fun.data="mean_cl_boot", geom="ribbon", alpha = 0.2, col=NA , aes(group = clusterID)) + 
+  theme_bw() 
+
+fig
+
+
+```
+
+
